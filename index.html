@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>곰돌이의 별자리 탐험</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; display:flex; align-items:center; justify-content:center; min-height:100vh; font-family:'Courier New',monospace; overflow:hidden; }
+#wrap { position:relative; width:800px; height:450px; }
+canvas#c { display:block; }
+
+/* Pokemon DP style dialog */
+#dialog {
+  display:none; position:absolute; bottom:6px; left:40px; right:40px;
+  background:rgba(10,10,40,.88); border:2px solid #ffe066; border-radius:6px;
+  padding:6px 10px 5px; color:#fff; font-size:11px; line-height:1.5;
+  z-index:30; box-shadow:inset 0 0 0 1px #8B6940; white-space:pre-line;
+  max-height:90px; overflow:hidden;
+}
+#dialog .spk { color:#ffe066; font-size:9px; font-weight:bold; letter-spacing:2px; margin-bottom:2px; }
+#dialog .hint { color:#aaa; font-size:9px; text-align:right; margin-top:3px; animation:blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* Quiz */
+#quiz {
+  display:none; position:absolute; inset:0; background:rgba(0,0,20,.93);
+  z-index:50; flex-direction:column; align-items:center; justify-content:center; gap:11px;
+}
+#quiz.on { display:flex; }
+.qtitle { color:#ffe066; font-size:11px; letter-spacing:3px; }
+#lastbadge { background:#e82255; color:#fff; font-size:12px; font-weight:bold; padding:3px 14px; border-radius:20px; animation:pop .8s infinite; }
+@keyframes pop { 0%,100%{transform:scale(1)} 50%{transform:scale(1.09)} }
+#qtext { color:#fff; font-size:17px; font-weight:bold; text-align:center; max-width:680px; line-height:1.6; text-shadow:0 0 10px #4a9eff; white-space:pre-line; }
+#qopts { display:flex; flex-direction:column; gap:8px; width:660px; }
+#qopts.g2 { display:grid; grid-template-columns:1fr 1fr; }
+.qbtn { padding:11px 15px; background:#1a1a4a; border:2px solid #4a9eff; border-radius:8px; color:#fff; font-size:13px; cursor:pointer; font-family:'Courier New',monospace; transition:all .15s; text-align:left; }
+.qbtn:hover:not(:disabled) { background:#2a2a6a; border-color:#ffe066; color:#ffe066; }
+.qbtn.ok { background:#1a4a2a !important; border-color:#44ff88 !important; color:#44ff88 !important; }
+.qbtn.ng { background:#4a1a1a !important; border-color:#ff4444 !important; color:#ff4444 !important; }
+#starwrap { background:#020214; border:2px solid #4a9eff55; border-radius:8px; padding:5px; }
+
+/* HUD */
+#hud { display:none; position:absolute; top:0; left:0; right:0; height:26px; background:#0d0d3a; border-bottom:2px solid #4a9eff33; align-items:center; padding:0 10px; gap:8px; z-index:20; }
+.hlbl { color:#aaa; font-size:10px; white-space:nowrap; }
+#pw { flex:1; height:9px; background:#1a1a4a; border-radius:5px; overflow:hidden; }
+#pb { height:100%; background:linear-gradient(90deg,#4a9eff,#ffe066); width:0%; transition:width .5s; }
+#hcnt { color:#ffe066; font-size:11px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="800" height="450"></canvas>
+  <div id="hud">
+    <span class="hlbl">탐험기지까지</span>
+    <div id="pw"><div id="pb"></div></div>
+    <span id="hcnt">0 / 5</span>
+  </div>
+  <div id="dialog">
+    <div class="spk" id="dspk"></div>
+    <div id="dtxt"></div>
+    <div class="hint">▼ 클릭하여 계속</div>
+  </div>
+  <div id="quiz">
+    <div class="qtitle">✦ 별자리 요정의 퀴즈 ✦</div>
+    <div id="lastbadge" style="display:none">⭐ 마지막 퀴즈!</div>
+    <div id="qtext"></div>
+    <div id="starwrap" style="display:none"><canvas id="qc" width="300" height="160"></canvas></div>
+    <div id="qopts"></div>
+  </div>
+</div>
+<script>
+// ═══════════ Audio (Web Audio API) ═══════════
+const AC = new (window.AudioContext || window.webkitAudioContext)();
+function tone(freq, dur, type, vol) {
+  type = type || 'square'; vol = vol || 0.28;
+  var o = AC.createOscillator(), g = AC.createGain();
+  o.connect(g); g.connect(AC.destination);
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, AC.currentTime + dur);
+  o.start(); o.stop(AC.currentTime + dur);
+}
+function sfxBlock() { tone(600, 0.05, 'square', 0.25); setTimeout(function(){ tone(900, 0.08, 'square', 0.2); }, 55); }
+function sfxOk() { [523,659,784,1047].forEach(function(f,i){ setTimeout(function(){ tone(f, 0.15, 'sine', 0.3); }, i*100); }); }
+function sfxNg() { [300,200].forEach(function(f,i){ setTimeout(function(){ tone(f, 0.22, 'sawtooth', 0.3); }, i*160); }); }
+function sfxFanfare() {
+  [523,523,523,415,523,659,392].forEach(function(f,i){ setTimeout(function(){ tone(f, 0.18, 'sine', 0.4); }, i*180); });
+  setTimeout(function(){ tone(784, 0.7, 'sine', 0.4); }, 1280);
+}
+
+// ═══════════ Canvas setup ═══════════
+var cv = document.getElementById('c');
+var ctx = cv.getContext('2d');
+var W = 800, H = 450, GY = 370; // ground y
+
+// ═══════════ Stars ═══════════
+var STARS = [];
+for (var _i = 0; _i < 140; _i++) {
+  STARS.push({ x: Math.random()*W, y: Math.random()*310, r: Math.random()*1.8+0.4, tw: Math.random()*Math.PI*2 });
+}
+
+function drawSky(scroll) {
+  scroll = scroll || 0;
+  var sk = ctx.createLinearGradient(0,0,0,H);
+  sk.addColorStop(0,'#020214'); sk.addColorStop(0.7,'#0a0a3a'); sk.addColorStop(1,'#160d00');
+  ctx.fillStyle = sk; ctx.fillRect(0,0,W,H);
+  for (var i = 0; i < STARS.length; i++) {
+    var s = STARS[i]; s.tw += 0.03;
+    ctx.globalAlpha = 0.45 + Math.sin(s.tw)*0.4;
+    ctx.fillStyle = '#fff'; ctx.beginPath();
+    ctx.arc(((s.x - scroll*0.06) % W + W) % W, s.y, s.r, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#fffde0'; ctx.shadowColor = '#fffde0'; ctx.shadowBlur = 18;
+  ctx.beginPath(); ctx.arc(700,55,27,0,Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+}
+
+function drawGround(scroll) {
+  scroll = scroll || 0;
+  ctx.fillStyle = '#1a1005';
+  for (var i = 0; i < 6; i++) {
+    var bx = ((i*240 - scroll*0.18 + 2400) % 1440) - 100;
+    ctx.beginPath(); ctx.moveTo(bx,340); ctx.quadraticCurveTo(bx+120,265,bx+240,340); ctx.closePath(); ctx.fill();
+  }
+  var g = ctx.createLinearGradient(0,GY,0,H);
+  g.addColorStop(0,'#d4a44c'); g.addColorStop(1,'#b8893a');
+  ctx.fillStyle = g; ctx.fillRect(0,GY,W,H-GY);
+  ctx.strokeStyle = '#c09040'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0,GY+2); ctx.lineTo(W,GY+2); ctx.stroke();
+}
+
+// ═══════════ Draw helpers ═══════════
+function rr(c,x,y,w,h,r) {
+  c.beginPath();
+  c.moveTo(x+r,y); c.lineTo(x+w-r,y); c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r); c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  c.lineTo(x+r,y+h); c.quadraticCurveTo(x,y+h,x,y+h-r);
+  c.lineTo(x,y+r); c.quadraticCurveTo(x,y,x+r,y); c.closePath();
+}
+
+// ═══════════ Bear ═══════════
+var FR = 0;
+function drawBear(c, x, y, sc, lp, fl) {
+  sc = sc || 1; lp = lp || 0;
+  if (fl && Math.floor(FR/4)%2 === 0) return;
+  c.save(); c.translate(x, y); c.scale(sc, sc);
+  c.fillStyle = 'rgba(0,0,0,.3)'; c.beginPath(); c.ellipse(24,64,18,5,0,0,Math.PI*2); c.fill();
+  c.fillStyle = '#8B5E3C'; rr(c,8,18,32,30,10); c.fill();
+  c.fillStyle = '#C8956C'; rr(c,14,26,20,18,6); c.fill();
+  c.fillStyle = '#8B5E3C'; c.beginPath(); c.ellipse(24,14,16,14,0,0,Math.PI*2); c.fill();
+  [10,38].forEach(function(ex){
+    c.fillStyle='#8B5E3C'; c.beginPath(); c.ellipse(ex,4,6,6,0,0,Math.PI*2); c.fill();
+    c.fillStyle='#C8956C'; c.beginPath(); c.ellipse(ex,4,3,3,0,0,Math.PI*2); c.fill();
+  });
+  c.fillStyle='#222';
+  c.beginPath(); c.ellipse(18,12,3,3.5,0,0,Math.PI*2); c.fill();
+  c.beginPath(); c.ellipse(30,12,3,3.5,0,0,Math.PI*2); c.fill();
+  c.fillStyle='#fff';
+  c.beginPath(); c.ellipse(19.5,10.5,1.2,1.2,0,0,Math.PI*2); c.fill();
+  c.beginPath(); c.ellipse(31.5,10.5,1.2,1.2,0,0,Math.PI*2); c.fill();
+  c.fillStyle='#C8956C'; c.beginPath(); c.ellipse(24,18,7,5,0,0,Math.PI*2); c.fill();
+  c.fillStyle='#333'; c.beginPath(); c.ellipse(24,17,3,2,0,0,Math.PI*2); c.fill();
+  c.strokeStyle='#333'; c.lineWidth=1.5; c.beginPath(); c.arc(24,19,3,0.1,Math.PI-0.1); c.stroke();
+  c.fillStyle='#5B8C5A'; rr(c,34,20,14,20,4); c.fill();
+  c.fillStyle='#4a7a49'; c.fillRect(37,24,8,5);
+  var sw = Math.sin(lp)*5;
+  c.fillStyle='#7A5232';
+  c.save(); c.translate(6,28); c.rotate((-0.3+sw*0.04)*Math.PI); rr(c,-5,0,10,18,5); c.fill(); c.restore();
+  c.save(); c.translate(42,28); c.rotate((0.3-sw*0.04)*Math.PI); rr(c,-5,0,10,18,5); c.fill(); c.restore();
+  var lL=Math.sin(lp)*8, lR=Math.sin(lp+Math.PI)*8;
+  c.save(); c.translate(14,44); c.rotate(lL*0.04); rr(c,-6,0,12,18,5); c.fill(); c.restore();
+  c.save(); c.translate(34,44); c.rotate(lR*0.04); rr(c,-6,0,12,18,5); c.fill(); c.restore();
+  c.restore();
+}
+
+// ═══════════ Fairy ═══════════
+function starShape(c,cx,cy,n,oR,iR) {
+  var rot = (Math.PI/2)*3, step = Math.PI/n;
+  c.beginPath(); c.moveTo(cx, cy-oR);
+  for (var i=0;i<n;i++) {
+    c.lineTo(cx+Math.cos(rot)*oR, cy+Math.sin(rot)*oR); rot+=step;
+    c.lineTo(cx+Math.cos(rot)*iR, cy+Math.sin(rot)*iR); rot+=step;
+  }
+  c.lineTo(cx, cy-oR); c.closePath();
+}
+function drawFairy(c, x, y, big) {
+  var sc = big ? 1.5 : 1;
+  var bob = Math.sin(FR*0.06)*6;
+  c.save(); c.translate(x, y+bob); c.scale(sc, sc);
+  var grd = c.createRadialGradient(0,0,4,0,0,34);
+  grd.addColorStop(0,'rgba(255,220,50,.5)'); grd.addColorStop(1,'rgba(255,220,50,0)');
+  c.fillStyle=grd; c.beginPath(); c.arc(0,0,34,0,Math.PI*2); c.fill();
+  c.fillStyle='#ffe066'; starShape(c,0,0,5,20,9); c.fill();
+  c.strokeStyle='rgba(255,255,255,0.5)'; c.lineWidth=1.5; c.stroke();
+  c.fillStyle='#333';
+  c.beginPath(); c.ellipse(-5,-2,2.5,2.5,0,0,Math.PI*2); c.fill();
+  c.beginPath(); c.ellipse(5,-2,2.5,2.5,0,0,Math.PI*2); c.fill();
+  c.strokeStyle='#333'; c.lineWidth=1.2; c.beginPath(); c.arc(0,3,3.5,0.1,Math.PI-0.1); c.stroke();
+  c.restore();
+}
+
+// ═══════════ Constellation canvases ═══════════
+function drawConst(qcv, which) {
+  var c = qcv.getContext('2d');
+  c.clearRect(0,0,300,160); c.fillStyle='#020214'; c.fillRect(0,0,300,160);
+  function star(x,y,main) {
+    if (main) {
+      var g=c.createRadialGradient(x,y,1,x,y,10); g.addColorStop(0,'#fffacc'); g.addColorStop(1,'rgba(255,240,100,0)');
+      c.fillStyle=g; c.beginPath(); c.arc(x,y,10,0,Math.PI*2); c.fill();
+    }
+    c.fillStyle='#ffe066'; c.beginPath(); c.arc(x,y,main?4.5:3.5,0,Math.PI*2); c.fill();
+    c.fillStyle='#fff'; c.beginPath(); c.arc(x-1,y-1,1,0,Math.PI*2); c.fill();
+  }
+  function line(x1,y1,x2,y2) {
+    c.strokeStyle='rgba(160,190,255,.55)'; c.lineWidth=1;
+    c.setLineDash([4,5]); c.beginPath(); c.moveTo(x1,y1); c.lineTo(x2,y2); c.stroke(); c.setLineDash([]);
+  }
+  function lbl(x,y,t,col) { c.fillStyle=col||'#adf'; c.font='10px Courier New'; c.textAlign='center'; c.fillText(t,x,y); }
+
+  if (which === 0) { // 큰곰자리
+    var pts=[[55,85],[90,74],[125,68],[162,63],[172,94],[142,114],[108,104]];
+    for(var i=0;i<pts.length-1;i++) line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1]);
+    line(pts[6][0],pts[6][1],pts[4][0],pts[4][1]);
+    pts.forEach(function(p){ star(p[0],p[1]); });
+    lbl(115,148,'큰곰자리 (북두칠성)','#ffe066');
+    c.fillStyle='#adf'; c.font='9px Courier New'; c.textAlign='right'; c.fillText('손잡이',178,58);
+    c.textAlign='left'; c.fillText('국자',48,108);
+  } else if (which === 1) { // 작은곰자리
+    var pts2=[[235,65],[205,78],[178,90],[152,103],[140,128],[166,138],[193,130]];
+    for(var i=0;i<pts2.length-1;i++) line(pts2[i][0],pts2[i][1],pts2[i+1][0],pts2[i+1][1]);
+    line(pts2[6][0],pts2[6][1],pts2[4][0],pts2[4][1]);
+    pts2.forEach(function(p,i){ star(p[0],p[1], i===0); });
+    c.fillStyle='#ffff88'; c.font='bold 9px Courier New'; c.textAlign='left'; c.fillText('★ 북극성',243,62);
+    lbl(172,153,'작은곰자리','#ffe066');
+  } else { // 카시오페이아
+    var pts3=[[45,90],[100,52],[155,90],[210,52],[265,90]];
+    for(var i=0;i<pts3.length-1;i++) line(pts3[i][0],pts3[i][1],pts3[i+1][0],pts3[i+1][1]);
+    pts3.forEach(function(p){ star(p[0],p[1]); });
+    lbl(155,136,'카시오페이아자리','#ffe066');
+    lbl(155,151,'W 또는 M 모양','#adf');
+  }
+}
+
+// ═══════════ Quizzes ═══════════
+var QZ = [
+  { q:'북극성은 어떻게 찾을 수 있을까?',
+    opts:['북쪽 하늘에서 시간이 지나도 거의 움직이지 않는 별을 찾아봅니다.','동쪽 하늘에서 시간이 지나도 거의 움직이지 않는 별을 찾아봅니다.'],
+    ans:0, star:-1, last:false },
+  { q:'다음은 북극성 주변 별자리 중 하나입니다.\n이 별자리의 이름과 특징은 무엇일까요?',
+    opts:['큰곰자리 - 꼬리 쪽에 있는 7개의 별을 북두칠성이라고 해요.','작은곰자리 - 작은곰자리에는 북극성이 있어요.'],
+    ans:0, star:0, last:false },
+  { q:'다음은 북극성 주변 별자리 중 하나입니다.\n이 별자리의 이름과 특징은 무엇일까요?',
+    opts:['작은곰자리 - 작은곰자리에는 북극성이 있습니다.','카시오페이아자리 - M자 또는 W자 모양으로 보입니다.'],
+    ans:0, star:1, last:false },
+  { q:'다음은 북극성 주변 별자리 중 하나입니다.\n이 별자리의 이름과 특징은 무엇일까요?',
+    opts:['카시오페이아자리 - M자 또는 W자 모양으로 보입니다.','카시오페이아자리 - 국자 모양처럼 보입니다.'],
+    ans:0, star:2, last:false },
+  { q:'별이란 무엇일까요?',
+    opts:['행성과 달리 태양처럼 스스로 빛을 내는 천체이다.','지구 주위를 공전하는 천체이다.','밤하늘에서 빛나는 모든 천체이다.','태양 주위를 공전하며 빛을 반사하는 천체이다.'],
+    ans:0, star:-1, last:true }
+];
+
+// ═══════════ Game state ═══════════
+var SC = 'intro'; // intro | c1 | c2 | c3 | c4 | game | ending
+var QI = 0;       // quizzes passed
+var camX = 0;
+var dlgI = 0;
+
+// Bear object
+var bear = { wx:100, y:GY-60, vy:0, og:true, lp:0 };
+var BEAR_SX = 150; // bear fixed screen x
+var BLOCK_Y = 235; // block top y
+var BLOCK_WX = [700, 1550, 2400, 3250, 4100]; // world x of each block
+var BASE_WX = 4800;
+
+// Cutscene vars
+var c2Y = -80, c2Land = false, c2ExcT = 0;
+var c3Anim = 0;
+var endT = 0;
+var resT = 0, resOk = null;
+var quizOpen = false;
+var hitFlag = false; // prevent double-trigger
+var cobraT = 0; // cobra scene timer
+
+// Scripts
+var C1 = [
+  ['내레이터', '곰돌이가 사막 탐험 중에 큰 폭풍우를 만나게 된다..'],
+  ['내레이터', '곰돌이는 무사히 탐험기지에 도착할 수 있을까요?\n하지만 요정이 나타나 퀴즈를 맞추면 탐험기지에 무사히 데려다 준다고 해요!\n곰돌이가 탐험기지에 무사히 도착하도록 같이 도와봅시다!']
+];
+var C2 = [['곰돌이', '앗, 폭풍을 만나서 동료들과 멀어져 버렸어!\n핸드폰도 잃어버리고, 가진 건 나침반 밖에 없는데...\n탐험기지에서 만나기로 했는데, 어떻게 찾을 수 있을까?']];
+var C3 = [['북극성의 요정', '안녕! 나는 북극성의 요정이야!\n내가 내는 퀴즈를 다 맞추면 무사히 탐험기지로 데려가 줄게!']];
+var C4 = [
+  ['곰돌이', '정말???'],
+  ['요정', '물론이야! 곰돌이가 별자리 블록을 지나갈 때마다 퀴즈가 나와. 잘 맞춰봐!'],
+  ['안내', '곰돌이가 무사히 탐험기지에 돌아갈 수 있도록\n퀴즈를 같이 풀어봅시다!\n\n▶ 스페이스바 또는 화면 클릭으로 점프도 할 수 있어요!']
+];
+
+// ═══════════ Dialog helpers ═══════════
+function dlgShow(sp, txt) {
+  document.getElementById('dspk').textContent = sp;
+  document.getElementById('dtxt').textContent = txt;
+  document.getElementById('dialog').style.display = 'block';
+}
+function dlgHide() { document.getElementById('dialog').style.display = 'none'; }
+
+// ═══════════ Cutscene click ═══════════
+function cutClick() {
+  if (SC === 'c1') {
+    if (dlgI < C1.length) { dlgShow(C1[dlgI][0], C1[dlgI][1]); dlgI++; }
+    else { dlgHide(); dlgI=0; SC='c2'; c2Y=-80; c2Land=false; c2ExcT=0; }
+  } else if (SC === 'c2') {
+    if (!c2Land) return;
+    if (dlgI < C2.length) { dlgShow(C2[dlgI][0], C2[dlgI][1]); dlgI++; }
+    else { dlgHide(); dlgI=0; SC='c3'; c3Anim=0; }
+  } else if (SC === 'c3') {
+    if (c3Anim < 25) return;
+    if (dlgI < C3.length) { dlgShow(C3[dlgI][0], C3[dlgI][1]); dlgI++; }
+    else { dlgHide(); dlgI=0; SC='c4'; }
+  } else if (SC === 'c4') {
+    if (dlgI < C4.length) { dlgShow(C4[dlgI][0], C4[dlgI][1]); dlgI++; }
+    else { dlgHide(); startGame(); }
+  }
+}
+
+function startGame() {
+  SC = 'game';
+  document.getElementById('hud').style.display = 'flex';
+  bear = { wx:100, y:GY-60, vy:0, og:true, lp:0 };
+  camX=0; QI=0; resT=0; resOk=null; hitFlag=false; quizOpen=false;
+  updateHUD();
+}
+function updateHUD() {
+  document.getElementById('pb').style.width = (QI/5*100) + '%';
+  document.getElementById('hcnt').textContent = QI + ' / 5';
+}
+
+// ═══════════ Quiz UI ═══════════
+function openQuiz(i) {
+  quizOpen = true;
+  var q = QZ[i];
+  document.getElementById('qtext').textContent = q.q;
+  document.getElementById('lastbadge').style.display = q.last ? 'block' : 'none';
+  var sw = document.getElementById('starwrap');
+  if (q.star >= 0) { sw.style.display='block'; drawConst(document.getElementById('qc'), q.star); }
+  else sw.style.display = 'none';
+  var od = document.getElementById('qopts');
+  od.innerHTML = '';
+  od.className = 'qopts' + (q.opts.length > 2 ? ' g2' : '');
+  q.opts.forEach(function(op, j) {
+    var b = document.createElement('button'); b.className='qbtn';
+    b.textContent = ['①','②','③','④'][j] + ' ' + op;
+    b.onclick = function(){ doAnswer(j, i, b, od); };
+    od.appendChild(b);
+  });
+  document.getElementById('quiz').classList.add('on');
+}
+
+function doAnswer(chosen, qi, btn, od) {
+  var q = QZ[qi];
+  od.querySelectorAll('.qbtn').forEach(function(b){ b.disabled=true; });
+  if (chosen === q.ans) {
+    btn.classList.add('ok'); sfxOk();
+    setTimeout(function(){
+      document.getElementById('quiz').classList.remove('on');
+      quizOpen = false; hitFlag = false;
+      QI++; updateHUD(); resOk=true; resT=150;
+      SC = 'game';
+      if (QI === 5) setTimeout(startEnding, 1500);
+    }, 1300);
+  } else {
+    btn.classList.add('ng');
+    od.querySelectorAll('.qbtn')[q.ans].classList.add('ok');
+    sfxNg();
+    setTimeout(function(){
+      document.getElementById('quiz').classList.remove('on');
+      quizOpen = false;
+      startCobra();
+    }, 2200);
+  }
+}
+
+function startEnding() { SC='ending'; endT=0; sfxFanfare(); }
+
+function startCobra() {
+  SC = 'cobra'; cobraT = 0;
+  // hiss sound
+  [180,160,140,120].forEach(function(f,i){
+    setTimeout(function(){ tone(f, 0.3, 'sawtooth', 0.35); }, i*120);
+  });
+}
+
+// ═══════════ Draw Cobra ═══════════
+function drawCobra(c, x, y, phase) {
+  c.save(); c.translate(x, y);
+  // body coil
+  var coilScale = Math.min(1, phase / 30);
+  c.scale(coilScale, coilScale);
+  // shadow
+  c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(0, 90, 50, 12, 0, 0, Math.PI*2); c.fill();
+  // coil body segments
+  var bodyColor = '#2d8a2d';
+  var bodyDark  = '#1a5c1a';
+  var belly     = '#a8d878';
+  // bottom coil
+  c.fillStyle = bodyColor; c.beginPath(); c.ellipse(0, 72, 44, 20, 0, 0, Math.PI*2); c.fill();
+  c.fillStyle = bodyDark;  c.beginPath(); c.ellipse(0, 72, 44, 20, 0, Math.PI, Math.PI*2); c.fill();
+  // middle coil
+  c.fillStyle = bodyColor; c.beginPath(); c.ellipse(0, 50, 34, 16, 0, 0, Math.PI*2); c.fill();
+  // neck flare (hood)
+  c.fillStyle = bodyColor;
+  c.beginPath();
+  c.moveTo(-30, 10); c.quadraticCurveTo(-48, -20, -16, -38);
+  c.lineTo(0, -24);
+  c.lineTo(16, -38); c.quadraticCurveTo(48, -20, 30, 10);
+  c.quadraticCurveTo(0, 20, -30, 10);
+  c.fill();
+  // hood pattern
+  c.fillStyle = belly;
+  c.beginPath();
+  c.moveTo(-18, 8); c.quadraticCurveTo(-28, -14, -10, -28);
+  c.lineTo(0, -18); c.lineTo(10, -28);
+  c.quadraticCurveTo(28, -14, 18, 8);
+  c.quadraticCurveTo(0, 16, -18, 8);
+  c.fill();
+  // head
+  c.fillStyle = bodyColor; c.beginPath(); c.ellipse(0, -44, 18, 14, 0, 0, Math.PI*2); c.fill();
+  // eyes
+  c.fillStyle = '#ff2200';
+  c.beginPath(); c.ellipse(-8, -48, 5, 5, 0, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.ellipse(8, -48, 5, 5, 0, 0, Math.PI*2); c.fill();
+  c.fillStyle = '#000';
+  c.beginPath(); c.ellipse(-8, -48, 2.5, 2.5, 0, 0, Math.PI*2); c.fill();
+  c.beginPath(); c.ellipse(8, -48, 2.5, 2.5, 0, 0, Math.PI*2); c.fill();
+  // tongue flicker
+  if (Math.floor(phase / 6) % 2 === 0) {
+    c.strokeStyle = '#ff3300'; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(0, -30); c.lineTo(0, -18);
+    c.lineTo(-7, -12); c.moveTo(0, -18); c.lineTo(7, -12); c.stroke();
+  }
+  c.restore();
+}
+
+// ═══════════ Input ═══════════
+function doJump() {
+  if (SC === 'game' && bear.og && !quizOpen) {
+    bear.vy = -13.5; bear.og = false;
+  }
+}
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); doJump(); }
+});
+cv.addEventListener('click', function(e) {
+  AC.resume();
+  if (SC === 'intro') {
+    SC='c1'; dlgShow(C1[0][0], C1[0][1]); dlgI=1; return;
+  }
+  if (SC==='c1'||SC==='c2'||SC==='c3'||SC==='c4') { cutClick(); return; }
+  if (SC === 'game') { doJump(); return; }
+  if (SC === 'ending' && endT > 120) {
+    var rect = cv.getBoundingClientRect();
+    var mx = (e.clientX-rect.left)*(W/rect.width);
+    var my = (e.clientY-rect.top)*(H/rect.height);
+    if (mx>310&&mx<490&&my>252&&my<296) {
+      dlgHide(); dlgI=0; SC='intro'; FR=0; QI=0;
+      document.getElementById('hud').style.display='none';
+      endT=0; resT=0; resOk=null;
+    }
+  }
+});
+
+// ═══════════ Block ═══════════
+function drawBlock(sx, sy, used) {
+  var s = 38;
+  ctx.fillStyle = used ? '#777' : '#e8a000'; ctx.fillRect(sx,sy,s,s);
+  if (!used) { ctx.fillStyle='#c88000'; ctx.fillRect(sx,sy+s-4,s,4); ctx.fillRect(sx+s-4,sy,4,s); }
+  ctx.strokeStyle='#4a3000'; ctx.lineWidth=2; ctx.strokeRect(sx,sy,s,s);
+  if (!used) {
+    ctx.fillStyle='#fff'; ctx.font='bold 22px Courier New'; ctx.textAlign='center';
+    ctx.fillText('?', sx+s/2, sy+s/2+8);
+    // glow
+    var ga = 0.3 + Math.sin(FR*0.1)*0.25;
+    ctx.globalAlpha=ga;
+    var grd=ctx.createRadialGradient(sx+s/2,sy+s/2,4,sx+s/2,sy+s/2,30);
+    grd.addColorStop(0,'rgba(255,220,50,.6)'); grd.addColorStop(1,'rgba(255,220,50,0)');
+    ctx.fillStyle=grd; ctx.beginPath(); ctx.arc(sx+s/2,sy+s/2,30,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=1;
+  }
+}
+
+function drawBase(sx) {
+  ctx.fillStyle='#5B8C5A';
+  ctx.beginPath(); ctx.moveTo(sx+10,GY); ctx.lineTo(sx+60,GY-88); ctx.lineTo(sx+110,GY); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#4a7a49';
+  ctx.beginPath(); ctx.moveTo(sx+28,GY); ctx.lineTo(sx+60,GY-60); ctx.lineTo(sx+92,GY); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#d4a44c'; ctx.fillRect(sx+36,GY-22,48,22);
+  ctx.fillStyle='#8B6940'; ctx.fillRect(sx+58,GY-98,3,98);
+  ctx.fillStyle='#ff4444'; ctx.fillRect(sx+61,GY-95,24,15);
+  ctx.fillStyle='#fff'; ctx.font='bold 9px Courier New'; ctx.textAlign='center'; ctx.fillText('BASE',sx+73,GY-83);
+  ctx.fillStyle='#ffe066'; ctx.font='bold 14px Courier New'; ctx.textAlign='center'; ctx.fillText('탐험기지',sx+60,GY+20);
+}
+
+// ═══════════ Update ═══════════
+function update() {
+  FR++;
+  if (resT > 0) resT--;
+
+  if (SC === 'intro' || SC === 'quiz') return;
+
+  if (SC === 'cobra') {
+    cobraT++;
+    // phase 1 (0-60): cobra slides in from right
+    // phase 2 (60-110): cobra lunges at bear
+    // phase 3 (110-160): bear dragged off screen
+    // phase 4 (160-230): message shown
+    // phase 5 (230+): reset
+    if (cobraT === 230) {
+      SC = 'game';
+      bear = { wx:100, y:GY-60, vy:0, og:true, lp:0 };
+      camX=0; QI=0; hitFlag=false; quizOpen=false; updateHUD();
+    }
+    return;
+  }
+
+  if (SC === 'c1') return;
+
+  if (SC === 'c2') {
+    if (!c2Land) { c2Y += 7; if (c2Y >= GY-60) { c2Y=GY-60; c2Land=true; } }
+    else { c2ExcT++; if (c2ExcT===30 && dlgI===0) { dlgShow(C2[0][0],C2[0][1]); dlgI=1; } }
+    return;
+  }
+  if (SC === 'c3') {
+    c3Anim++;
+    if (c3Anim===25 && dlgI===0) { dlgShow(C3[0][0],C3[0][1]); dlgI=1; }
+    return;
+  }
+  if (SC === 'c4') {
+    if (dlgI===0) { dlgShow(C4[0][0],C4[0][1]); dlgI=1; }
+    return;
+  }
+
+  if (SC === 'game') {
+    if (quizOpen) return;
+
+    // Bear walks — auto-walk toward next target
+    var nextBlockWX = QI < 5 ? BLOCK_WX[QI] : BASE_WX;
+    bear.wx += 1.7;
+
+    // Physics
+    bear.vy += 0.68; bear.y += bear.vy;
+    if (bear.y >= GY-60) { bear.y=GY-60; bear.vy=0; bear.og=true; }
+    else bear.og = false;
+    if (bear.og) bear.lp += 0.18;
+
+    // Camera
+    camX = Math.max(0, bear.wx - BEAR_SX);
+
+    // Quiz trigger: when bear walks past a block's x position
+    if (QI < 5 && !hitFlag && bear.wx >= BLOCK_WX[QI]) {
+      hitFlag = true;
+      sfxBlock();
+      var _qi = QI;
+      setTimeout(function(){ SC='quiz'; openQuiz(_qi); }, 250);
+    }
+    return;
+  }
+
+  if (SC === 'ending') {
+    endT++;
+    if (bear.wx < BASE_WX - 10) { bear.wx += 2.2; bear.lp += 0.18; camX = Math.max(0, bear.wx - BEAR_SX); }
+  }
+}
+
+// ═══════════ Render ═══════════
+function render() {
+  ctx.clearRect(0,0,W,H);
+
+  // INTRO
+  if (SC === 'intro') {
+    drawSky(0); drawGround(0);
+    ctx.fillStyle='#ffe066'; ctx.font='bold 30px Courier New'; ctx.textAlign='center';
+    ctx.shadowColor='#ffe066'; ctx.shadowBlur=22;
+    ctx.fillText('⭐ 곰돌이의 별자리 탐험 ⭐', W/2, 150); ctx.shadowBlur=0;
+    ctx.fillStyle='#cce6ff'; ctx.font='14px Courier New';
+    ctx.fillText('별자리 요정과 함께 탐험기지로 돌아가자!', W/2, 195);
+    drawBear(ctx, W/2-24, 262, 1.3, FR*0.14);
+    drawFairy(ctx, W/2+82, 272);
+    var pa = 0.6 + Math.sin(FR*0.09)*0.38;
+    ctx.globalAlpha=pa; ctx.fillStyle='#ccc'; ctx.font='13px Courier New';
+    ctx.fillText('화면을 클릭하여 시작!', W/2, 385); ctx.globalAlpha=1;
+    return;
+  }
+
+  // CUT 1
+  if (SC === 'c1') {
+    var sx=Math.sin(FR*0.32)*5, sy=Math.cos(FR*1.4)*3;
+    ctx.save(); ctx.translate(sx,sy);
+    drawSky(0); drawGround(0);
+    ctx.fillStyle='rgba(60,30,0,.35)'; ctx.fillRect(0,0,W,H);
+    if (Math.sin(FR*0.44) > 0.82) { ctx.fillStyle='rgba(255,255,180,.1)'; ctx.fillRect(0,0,W,H); }
+    drawBear(ctx, W/2-24, GY-60, 1, 0);
+    ctx.restore();
+    return;
+  }
+
+  // CUT 2
+  if (SC === 'c2') {
+    drawSky(0); drawGround(0);
+    drawBear(ctx, W/2-24, c2Y, 1.1, 0);
+    if (c2Land && c2ExcT < 90) {
+      ctx.globalAlpha = Math.min(1, c2ExcT/10);
+      ctx.fillStyle='#fff'; ctx.font='bold 28px Courier New'; ctx.textAlign='center';
+      ctx.fillText('!', W/2+22, c2Y-18); ctx.globalAlpha=1;
+    }
+    return;
+  }
+
+  // CUT 3
+  if (SC === 'c3') {
+    drawSky(0); drawGround(0);
+    drawBear(ctx, W/2-90, GY-60, 1, 0);
+    if (c3Anim > 0) {
+      var fa = Math.min(1, c3Anim/25); ctx.globalAlpha=fa;
+      var cols=['#ffe066','#fff','#ffdd88','#ffccee'];
+      for (var i=0;i<8;i++) {
+        var ang=(i/8)*Math.PI*2+FR*0.12, r=28+Math.sin(FR*0.12+i)*10;
+        ctx.fillStyle=cols[i%4]; ctx.beginPath();
+        ctx.arc(W/2+65+Math.cos(ang)*r, GY-98+Math.sin(ang)*r*0.5, 3,0,Math.PI*2); ctx.fill();
+      }
+      drawFairy(ctx, W/2+65, GY-98, true); ctx.globalAlpha=1;
+    }
+    return;
+  }
+
+  // CUT 4
+  if (SC === 'c4') {
+    drawSky(0); drawGround(0);
+    drawBear(ctx, W/2-90, GY-60, 1, 0);
+    drawFairy(ctx, W/2+65, GY-102, true);
+    return;
+  }
+
+  // GAME (also renders behind quiz overlay)
+  if (SC === 'game' || SC === 'quiz') {
+    drawSky(camX); drawGround(camX);
+    var baseSX = BASE_WX - camX;
+    if (baseSX < W+200) drawBase(baseSX);
+    // blocks
+    for (var i=0;i<BLOCK_WX.length;i++) {
+      var bsx = BLOCK_WX[i] - camX;
+      if (bsx > -60 && bsx < W+60) drawBlock(bsx, BLOCK_Y, i < QI);
+    }
+    var bearSX2 = bear.wx - camX;
+    drawBear(ctx, bearSX2, bear.y, 1, bear.lp);
+    drawFairy(ctx, bearSX2+68, bear.y-20);
+    // feedback
+    if (resT > 0 && resOk !== null) {
+      ctx.globalAlpha = Math.min(1, resT/40);
+      ctx.fillStyle = resOk ? '#44ff88' : '#ff6666';
+      ctx.font = 'bold 15px Courier New'; ctx.textAlign='center';
+      ctx.fillText(
+        resOk ? '무사히 퀴즈 통과! 탐험기지에 가까워지고 있어요!'
+               : '아쉽게도 퀴즈를 틀렸어요. 다시 처음부터 도전해보세요!',
+        W/2, 62); ctx.globalAlpha=1;
+    }
+    // hint
+    if (FR < 280 && QI===0 && resT===0 && SC==='game') {
+      ctx.globalAlpha = Math.max(0, 1-FR/280);
+      ctx.fillStyle='#fff'; ctx.font='12px Courier New'; ctx.textAlign='center';
+      ctx.fillText('곰돌이가 블록을 지나가면 퀴즈가 시작돼요!', W/2, H-14);
+      ctx.globalAlpha=1;
+    }
+    // arrow guide — show when bear is near next block
+    if (SC==='game' && QI<5 && !quizOpen) {
+      var nwx = BLOCK_WX[QI], nbsx = nwx - camX;
+      if (nbsx > 0 && nbsx < W && Math.abs(nbsx - bearSX2) < 250) {
+        var arrowA = 0.6+Math.sin(FR*0.15)*0.35;
+        ctx.globalAlpha=arrowA; ctx.fillStyle='#ffe066';
+        ctx.font='bold 20px Courier New'; ctx.textAlign='center';
+        ctx.fillText('↑', nbsx+19, BLOCK_Y-18);
+        ctx.globalAlpha=1;
+      }
+    }
+    return;
+  }
+
+  // COBRA SCENE
+  if (SC === 'cobra') {
+    drawSky(camX); drawGround(camX);
+
+    var t = cobraT;
+    var cobraY = GY - 30;
+    // phase 0-40:  cobra rises/appears at right edge
+    // phase 40-120: cobra slides LEFT toward bear (BEAR_SX ~150)
+    // phase 120-140: cobra eats bear (flash + bear shrinks)
+    // phase 140-230: message + reset
+
+    var cobraStartX = W - 80;
+    var cobraEndX   = BEAR_SX + 60; // stop just on top of bear
+    var cobraX;
+    if (t < 40) {
+      cobraX = cobraStartX;
+    } else if (t < 120) {
+      var prog = (t - 40) / 80; // 0→1
+      cobraX = cobraStartX + (cobraEndX - cobraStartX) * prog;
+    } else {
+      cobraX = cobraEndX;
+    }
+
+    // bear: stands still, then disappears when cobra arrives (t>120)
+    var bearVisible = t < 120;
+    var bearScale = 1;
+    if (t >= 115 && t < 128) {
+      bearScale = Math.max(0, 1 - (t - 115) / 13); // shrinks as eaten
+    }
+
+    // screen shake when cobra reaches bear
+    if (t >= 118 && t < 130) {
+      ctx.save();
+      ctx.translate((Math.random()-0.5)*10, (Math.random()-0.5)*8);
+    }
+
+    // red flash on eat
+    if (t >= 118 && t < 135) {
+      var flashA = Math.sin((t-118)/17 * Math.PI) * 0.5;
+      ctx.fillStyle = 'rgba(220,0,0,' + flashA + ')';
+      ctx.fillRect(0,0,W,H);
+    }
+
+    // draw bear (scared flicker when cobra is close, eaten at t=120+)
+    if (bearVisible) {
+      var scared = t > 80;
+      drawBear(ctx, BEAR_SX, bear.y, bearScale, bear.lp, scared);
+    }
+
+    drawCobra(ctx, cobraX, cobraY, t);
+
+    if (t >= 118 && t < 130) ctx.restore();
+
+    // message panel
+    if (t > 145) {
+      var msgA = Math.min(1, (t-145)/20);
+      ctx.globalAlpha = msgA;
+      ctx.fillStyle = 'rgba(0,0,20,0.88)'; rr(ctx, 80, 140, 640, 140, 12); ctx.fill();
+      ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.fillStyle = '#ff6666'; ctx.font = 'bold 18px Courier New'; ctx.textAlign = 'center';
+      ctx.fillText('😱 곰돌이가 거대 코브라에게 잡혀갔어요!', W/2, 192);
+      ctx.fillStyle = '#ffe066'; ctx.font = '14px Courier New';
+      ctx.fillText('다시 한번 도전해 봅시다!', W/2, 224);
+      ctx.globalAlpha = 1;
+    }
+    return;
+  }
+
+  // ENDING
+  if (SC === 'ending') {
+    drawSky(camX); drawGround(camX);
+    var baseSX2 = BASE_WX - camX; drawBase(baseSX2);
+    drawBear(ctx, bear.wx-camX, bear.y, 1, bear.lp);
+    drawFairy(ctx, bear.wx-camX+68, bear.y-20);
+    // confetti
+    for (var i=0;i<10;i++) {
+      var px=((endT*5+i*80)%W), py=70+Math.sin(endT*0.07+i)*60;
+      ctx.fillStyle=['#ffe066','#ff88aa','#88ffdd','#4a9eff','#ff9944'][i%5];
+      ctx.beginPath(); ctx.arc(px,py,4.5,0,Math.PI*2); ctx.fill();
+    }
+    if (endT > 45) {
+      var ea = Math.min(1,(endT-45)/40); ctx.globalAlpha=ea;
+      ctx.fillStyle='rgba(0,0,20,.82)'; rr(ctx,70,105,660,188,10); ctx.fill();
+      ctx.strokeStyle='#ffe066'; ctx.lineWidth=3; ctx.stroke();
+      ctx.fillStyle='#ffe066'; ctx.font='bold 21px Courier New'; ctx.textAlign='center';
+      ctx.fillText('와우! 모든 퀴즈를 통과했어요!! 🎉', W/2, 158);
+      ctx.fillStyle='#cce6ff'; ctx.font='14px Courier New';
+      ctx.fillText('덕분에 곰돌이가 무사히 탐험기지에 도착했어요!', W/2, 194);
+      ctx.globalAlpha=1;
+    }
+    if (endT > 120) {
+      ctx.fillStyle='rgba(74,158,255,.95)'; rr(ctx,312,252,176,44,22); ctx.fill();
+      ctx.strokeStyle='#ffe066'; ctx.lineWidth=2; ctx.stroke();
+      ctx.fillStyle='#fff'; ctx.font='bold 14px Courier New'; ctx.textAlign='center';
+      ctx.fillText('🔄 다시 하기', W/2, 280);
+    }
+    return;
+  }
+}
+
+function loop() { update(); render(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>
